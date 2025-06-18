@@ -5,6 +5,9 @@ from typing import List
 from newspaper import Article
 from mcp.server.fastmcp import FastMCP
 
+# Optional fallback
+import trafilatura
+
 # === Constants ===
 SUMMARIES_DIR = "summaries"
 SUMMARY_LOG = os.path.join(SUMMARIES_DIR, "summaries.json")
@@ -13,18 +16,46 @@ SUMMARY_LOG = os.path.join(SUMMARIES_DIR, "summaries.json")
 os.makedirs(SUMMARIES_DIR, exist_ok=True)
 mcp = FastMCP("web_summarizer")
 
-# === Helper ===
+# === Helper Functions ===
+
 def extract_article(url: str):
-    article = Article(url)
-    article.download()
-    article.parse()
-    return article.title, article.text
+    """
+    Tries to extract article using Newspaper. Falls back to trafilatura if needed.
+    """
+    try:
+        article = Article(url)
+        article.download()
+        article.parse()
+        if article.text.strip():
+            return article.title or "Untitled", article.text
+    except Exception:
+        pass
+
+    # Fallback to trafilatura
+    downloaded = trafilatura.fetch_url(url)
+    if downloaded:
+        content = trafilatura.extract(downloaded)
+        meta = trafilatura.extract_metadata(downloaded)
+        title = getattr(meta, "title", "Untitled") if meta else "Untitled"
+        return title, content or ""
+    
+    raise ValueError("Unable to extract article content")
 
 def dummy_summary(text: str):
-    # Use an LLM here if you want (like OpenAI)
-    return text[:500] + "..." if len(text) > 500 else text
+    """
+    Returns first few complete sentences up to ~500 chars.
+    """
+    import re
+    sentences = re.split(r'(?<=[.!?]) +', text)
+    summary = ""
+    for sentence in sentences:
+        if len(summary) + len(sentence) > 500:
+            break
+        summary += sentence + " "
+    return summary.strip() + "..." if summary else text[:500] + "..."
 
 # === MCP TOOLS ===
+
 @mcp.tool()
 def summarize_website(url: str) -> str:
     """
@@ -63,13 +94,13 @@ def save_summary(title: str, content: str, tags: List[str]) -> str:
 
     # Update log
     try:
-        with open(SUMMARY_LOG, "r") as f:
+        with open(SUMMARY_LOG, "r", encoding="utf-8") as f:
             logs = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         logs = []
 
     logs.append(log_entry)
-    with open(SUMMARY_LOG, "w") as f:
+    with open(SUMMARY_LOG, "w", encoding="utf-8") as f:
         json.dump(logs, f, indent=2)
 
     return f"✅ Summary saved in: {', '.join(log_entry['files'])}"
@@ -120,7 +151,6 @@ def view_all_summaries() -> List[str]:
                 except Exception:
                     summaries.append(f"{file} - [Error reading file]")
     return summaries if summaries else ["📭 No summaries found."]
-
 
 # === Run Server ===
 if __name__ == "__main__":
