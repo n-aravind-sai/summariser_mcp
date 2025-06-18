@@ -57,16 +57,27 @@ def dummy_summary(text: str):
 # === MCP TOOLS ===
 
 @mcp.tool()
+@mcp.tool()
 def summarize_website(url: str) -> str:
     """
-    Extracts and summarizes article content from a given URL.
+    Extracts and summarizes article content from a given URL, then automatically saves it.
     """
     try:
         title, content = extract_article(url)
         summary = dummy_summary(content)
-        return f"**Title:** {title}\n\n**Summary:**\n{summary}"
+
+        # Auto-tag based on domain or use default
+        from urllib.parse import urlparse
+        netloc = urlparse(url).netloc.replace("www.", "")
+        auto_tag = netloc.split('.')[0] if '.' in netloc else "auto"
+
+        # Save summary automatically
+        save_msg = save_summary(title=title, content=summary, tags=[auto_tag])
+
+        return f"**Title:** {title}\n\n**Summary:**\n{summary}\n\n{save_msg}"
     except Exception as e:
         return f"❌ Error extracting from URL: {str(e)}"
+
 
 @mcp.tool()
 def save_summary(title: str, content: str, tags: List[str]) -> str:
