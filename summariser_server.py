@@ -103,6 +103,25 @@ def search_summaries(keyword: str) -> List[str]:
                     continue
     return matches if matches else ["❌ No matches found."]
 
+@mcp.tool()
+def view_all_summaries() -> List[str]:
+    """
+    View all saved summary file names across all tags.
+    """
+    summaries = []
+    for root, _, files in os.walk(SUMMARIES_DIR):
+        for file in files:
+            if file.endswith(".txt"):
+                file_path = os.path.join(root, file)
+                try:
+                    with open(file_path, "r", encoding="utf-8") as f:
+                        first_line = f.readline().strip()
+                        summaries.append(f"{file} - {first_line}")
+                except Exception:
+                    summaries.append(f"{file} - [Error reading file]")
+    return summaries if summaries else ["📭 No summaries found."]
+
+
 # === Run Server ===
 if __name__ == "__main__":
     mcp.run(transport="stdio")
