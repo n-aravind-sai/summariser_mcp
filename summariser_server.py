@@ -57,7 +57,6 @@ def dummy_summary(text: str):
 # === MCP TOOLS ===
 
 @mcp.tool()
-@mcp.tool()
 def summarize_website(url: str) -> str:
     """
     Extracts and summarizes article content from a given URL, then automatically saves it.
