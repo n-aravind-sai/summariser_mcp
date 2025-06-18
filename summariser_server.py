@@ -76,8 +76,7 @@ def summarize_website(url: str) -> str:
         return f"**Title:** {title}\n\n**Summary:**\n{summary}\n\n{save_msg}"
     except Exception as e:
         return f"❌ Error extracting from URL: {str(e)}"
-
-
+    
 @mcp.tool()
 def save_summary(title: str, content: str, tags: List[str]) -> str:
     """
@@ -123,7 +122,7 @@ def get_summary_by_tag(tag: str) -> List[str]:
     tag_path = os.path.join(SUMMARIES_DIR, tag)
     if not os.path.isdir(tag_path):
         return [f"❌ No tag named '{tag}' found."]
-    return os.listdir(tag_path)
+    return sorted(os.listdir(tag_path))
 
 @mcp.tool()
 def search_summaries(keyword: str) -> List[str]:
@@ -138,11 +137,11 @@ def search_summaries(keyword: str) -> List[str]:
                 try:
                     with open(full_path, "r", encoding="utf-8") as f:
                         content = f.read()
-                        if keyword.lower() in content.lower():
+                        if keyword.lower() in file.lower() or keyword.lower() in content.lower():
                             matches.append(full_path)
                 except Exception:
                     continue
-    return matches if matches else ["❌ No matches found."]
+    return sorted(matches) if matches else ["❌ No matches found."]
 
 @mcp.tool()
 def view_all_summaries() -> List[str]:
@@ -160,7 +159,7 @@ def view_all_summaries() -> List[str]:
                         summaries.append(f"{file} - {first_line}")
                 except Exception:
                     summaries.append(f"{file} - [Error reading file]")
-    return summaries if summaries else ["📭 No summaries found."]
+    return sorted(summaries) if summaries else ["📭 No summaries found."]
 
 # === Run Server ===
 if __name__ == "__main__":
