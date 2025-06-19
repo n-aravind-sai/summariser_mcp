@@ -1,11 +1,11 @@
 import asyncio
 import subprocess
+import sys
 import time
 from typing import Optional
 from playwright.async_api import async_playwright
 
-
-# ✅ Custom fallback Client class (same as latest fastmcp)
+# ✅ Custom Client using stdio
 class Client:
     def __init__(self, stdin, stdout):
         self.stdin = stdin
@@ -16,21 +16,25 @@ class Client:
         return cls(stdin=stdin, stdout=stdout)
 
     async def process_query(self, query: str, *, timeout: Optional[float] = 30.0) -> str:
-        # Write the query to the server's stdin
-        self.stdin.write(query + "\n")
-        self.stdin.flush()
+        try:
+            print(f"[CLIENT] Sending query: {query}")
+            self.stdin.write(query + "\n")
+            self.stdin.flush()
 
-        # Read the response from server's stdout
-        response = await asyncio.wait_for(asyncio.to_thread(self.stdout.readline), timeout)
-        return response.strip()
+            print("[CLIENT] Awaiting response from MCP server...")
+            response = await asyncio.wait_for(asyncio.to_thread(self.stdout.readline), timeout)
+            print("[CLIENT] Received response ✅")
+            return response.strip()
+        except Exception as e:
+            raise RuntimeError(f"Error in process_query(): {e}")
 
 
 async def main():
-    server_file = "summariser_server.py"  # Update this to your actual server file name
+    server_file = "summariser_server.py"
 
     print("🚀 Starting MCP server subprocess...")
     server_process = subprocess.Popen(
-        ["uv", "run", server_file],
+        [sys.executable, server_file],  # ✅ NOT 'uv run'
         stdout=subprocess.PIPE,
         stdin=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -38,8 +42,7 @@ async def main():
         bufsize=1
     )
 
-    # Optional: give time for MCP server to start
-    time.sleep(1)
+    time.sleep(1)  # Let server warm up
 
     client = Client.from_stdio(stdin=server_process.stdin, stdout=server_process.stdout)
 
@@ -50,8 +53,10 @@ async def main():
         url = input("🔗 Enter a URL to summarize: ").strip()
 
         try:
-            await page.goto(url)
+            await page.goto(url, wait_until="domcontentloaded", timeout=60000)
             print(f"[✅] Opened: {url}")
+            await page.screenshot(path="debug.png", full_page=True)
+            print("🖼️ Screenshot saved as debug.png")
         except Exception as e:
             print(f"❌ Failed to open URL: {e}")
             await browser.close()
@@ -59,7 +64,8 @@ async def main():
             return
 
         try:
-            response = await client.process_query(f'summarize_website("{url}")')
+            query = f'summarize_website("{url}")'
+            response = await client.process_query(query)
             print("\n📄 Summary:\n")
             print(response)
         except Exception as e:
