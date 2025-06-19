@@ -1,0 +1,5 @@
+fastmcp
+anthropic
+newspaper3k
+trafilatura
+python-dotenv
