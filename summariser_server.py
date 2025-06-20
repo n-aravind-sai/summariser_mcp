@@ -7,6 +7,8 @@ from newspaper import Article
 from mcp.server.fastmcp import FastMCP
 import trafilatura
 import re
+import asyncio
+from playwright.async_api import async_playwright
 
 # === Logging Function ===
 def log(msg):
@@ -25,34 +27,154 @@ mcp = FastMCP("web_summarizer")
 
 # === Helper Functions ===
 
+async def extract_with_playwright(url: str):
+    """Extract content using playwright for dynamic websites"""
+    log(f"Attempting playwright extraction for: {url}")
+    
+    try:
+        async with async_playwright() as p:
+            # Launch browser (headless by default)
+            browser = await p.chromium.launch(
+                headless=True,
+                args=[
+                    '--no-sandbox',
+                    '--disable-dev-shm-usage',
+                    '--disable-gpu',
+                    '--disable-web-security',
+                    '--disable-features=VizDisplayCompositor'
+                ]
+            )
+            
+            try:
+                # Create new page
+                page = await browser.new_page()
+                
+                # Set a realistic user agent to avoid bot detection
+                await page.set_user_agent(
+                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+                    '(KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                )
+                
+                # Navigate to the page with timeout
+                log(f"Navigating to: {url}")
+                await page.goto(url, wait_until='domcontentloaded', timeout=30000)
+                
+                # Wait a bit for dynamic content to load
+                await page.wait_for_timeout(3000)
+                
+                # Try to get the title
+                title = await page.title()
+                if not title:
+                    title = "Untitled"
+                
+                # Extract main content using multiple selectors
+                content_selectors = [
+                    'article',
+                    '[role="main"]',
+                    'main',
+                    '.content',
+                    '.post-content',
+                    '.entry-content',
+                    '.article-content',
+                    '.story-body',
+                    '.post-body',
+                    '#content',
+                    '.main-content'
+                ]
+                
+                content = ""
+                for selector in content_selectors:
+                    try:
+                        element = await page.query_selector(selector)
+                        if element:
+                            text = await element.inner_text()
+                            if text and len(text.strip()) > 100:  # Only use if substantial content
+                                content = text.strip()
+                                log(f"Found content using selector: {selector}")
+                                break
+                    except Exception as e:
+                        log(f"Selector {selector} failed: {e}")
+                        continue
+                
+                # Fallback: get all text from body if no specific content found
+                if not content:
+                    log("Using fallback: extracting all body text")
+                    body_element = await page.query_selector('body')
+                    if body_element:
+                        content = await body_element.inner_text()
+                
+                # Clean up content
+                if content:
+                    # Remove excessive whitespace
+                    content = re.sub(r'\n\s*\n', '\n\n', content)
+                    content = re.sub(r' +', ' ', content)
+                    content = content.strip()
+                
+                if content and len(content) > 50:
+                    log(f"Playwright extraction successful: {len(content)} characters")
+                    return title, content
+                else:
+                    log("Playwright extraction failed: no substantial content found")
+                    return None, None
+                    
+            finally:
+                await browser.close()
+                
+    except Exception as e:
+        log(f"Playwright extraction failed: {e}")
+        return None, None
+
 def extract_article(url: str):
     log(f"Extracting article from: {url}")
     
-    # Try newspaper first
+    # Try newspaper first (fastest)
     try:
         article = Article(url)
         article.download()
         article.parse()
-        if article.text and article.text.strip():
+        if article.text and len(article.text.strip()) > 100:
             log("Successfully extracted with newspaper")
             return article.title or "Untitled", article.text
     except Exception as e:
         log(f"Newspaper failed: {e}")
 
-    # Try trafilatura as fallback
+    # Try trafilatura as second option
     try:
         downloaded = trafilatura.fetch_url(url)
         if downloaded:
             content = trafilatura.extract(downloaded)
             meta = trafilatura.extract_metadata(downloaded)
             title = getattr(meta, "title", "Untitled") if meta else "Untitled"
-            if content and content.strip():
+            if content and len(content.strip()) > 100:
                 log("Successfully extracted with trafilatura")
                 return title, content
     except Exception as e:
         log(f"Trafilatura failed: {e}")
 
-    raise ValueError("Unable to extract article content from URL")
+    # Try playwright as final fallback (for dynamic content)
+    try:
+        log("Trying playwright for dynamic content...")
+        
+        # Since we're in a sync function, we need to run the async playwright function
+        if hasattr(asyncio, 'run'):
+            # Python 3.7+
+            title, content = asyncio.run(extract_with_playwright(url))
+        else:
+            # Fallback for older Python versions
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                title, content = loop.run_until_complete(extract_with_playwright(url))
+            finally:
+                loop.close()
+        
+        if title and content:
+            return title, content
+            
+    except Exception as e:
+        log(f"Playwright extraction failed: {e}")
+
+    raise ValueError("Unable to extract article content from URL with any method")
 
 def dummy_summary(text: str):
     """Create a simple summary by taking first few sentences"""
@@ -125,7 +247,7 @@ def save_summary_helper(title: str, content: str, tags: List[str]) -> str:
 
 @mcp.tool()
 def summarize_website(url: str) -> str:
-    """Summarize content from a website URL"""
+    """Summarize content from a website URL (supports dynamic content)"""
     log(f"summarize_website() called with URL: {url}")
     
     try:
@@ -138,7 +260,7 @@ def summarize_website(url: str) -> str:
             url = 'https://' + url
             log(f"Added https:// to URL: {url}")
         
-        # Extract article content
+        # Extract article content (now with playwright support)
         title, content = extract_article(url)
         
         if not content or not content.strip():
@@ -249,11 +371,35 @@ def ping() -> str:
     log("ping() called")
     return "pong - MCP server is working!"
 
+@mcp.tool()
+def test_playwright() -> str:
+    """Test playwright installation and basic functionality"""
+    log("test_playwright() called")
+    try:
+        # Test a simple webpage
+        if hasattr(asyncio, 'run'):
+            title, content = asyncio.run(extract_with_playwright("https://example.com"))
+        else:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                title, content = loop.run_until_complete(extract_with_playwright("https://example.com"))
+            finally:
+                loop.close()
+        
+        if title and content:
+            return f"✅ Playwright is working! Test extraction successful.\nTitle: {title}\nContent length: {len(content)} chars"
+        else:
+            return "⚠️ Playwright is installed but test extraction failed"
+            
+    except Exception as e:
+        return f"❌ Playwright test failed: {str(e)}"
+
 # === Start MCP Server ===
 if __name__ == "__main__":
     try:
         log("Starting FastMCP server with stdio transport...")
-        
+        log("Playwright support enabled for dynamic websites")
         # Run the MCP server
         mcp.run(transport="stdio")
         

@@ -3,3 +3,6 @@ anthropic
 newspaper3k
 trafilatura
 python-dotenv
+chromium
+flask
+playwright
