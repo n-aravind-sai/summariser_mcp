@@ -36,5 +36,35 @@
     "files": [
       "summaries\\iana\\IANA-managed Reserved Domains_20250620104238.txt"
     ]
+  },
+  {
+    "title": "MCP: Build Rich-Context AI Apps with Anthropic",
+    "tags": [
+      "learn"
+    ],
+    "timestamp": "20250620110745",
+    "files": [
+      "summaries\\learn\\MCP_ Build Rich-Context AI Apps with Anthropic_20250620110745.txt"
+    ]
+  },
+  {
+    "title": "How To Make a Static Website",
+    "tags": [
+      "w3schools"
+    ],
+    "timestamp": "20250620114234",
+    "files": [
+      "summaries\\w3schools\\How To Make a Static Website_20250620114234.txt"
+    ]
+  },
+  {
+    "title": "How To Make a Static Website",
+    "tags": [
+      "w3schools"
+    ],
+    "timestamp": "20250620114244",
+    "files": [
+      "summaries\\w3schools\\How To Make a Static Website_20250620114244.txt"
+    ]
   }
 ]
