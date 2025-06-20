@@ -3,7 +3,7 @@ import subprocess
 import time
 import json
 import sys
-from typing import Optional
+from typing import Optional, Dict, List, Any
 from playwright.async_api import async_playwright
 
 
@@ -11,6 +11,7 @@ class SimpleMCPClient:
     def __init__(self, process):
         self.process = process
         self.request_id = 0
+        self.available_tools = {}
 
     @classmethod
     def from_process(cls, process):
@@ -27,6 +28,66 @@ class SimpleMCPClient:
         }
         return json.dumps(request) + "\n"
 
+    async def list_tools(self) -> Dict[str, Any]:
+        """List all available tools from the MCP server"""
+        print("[CLIENT] 🔍 Discovering available tools...")
+        
+        try:
+            request = self._create_request("tools/list", {})
+            self.process.stdin.write(request.encode('utf-8'))
+            self.process.stdin.flush()
+            
+            response_text = await asyncio.wait_for(
+                self._read_complete_response(), 
+                timeout=10.0
+            )
+            
+            response = json.loads(response_text.strip())
+            if "error" in response:
+                print(f"[CLIENT] ❌ Error listing tools: {response['error']}")
+                return {}
+            
+            tools = response.get("result", {}).get("tools", [])
+            self.available_tools = {tool["name"]: tool for tool in tools}
+            
+            print(f"[CLIENT] ✅ Found {len(self.available_tools)} tools")
+            return self.available_tools
+            
+        except Exception as e:
+            print(f"[CLIENT] ❌ Error listing tools: {e}")
+            return {}
+
+    def display_tools(self):
+        """Display all available tools in a nice format"""
+        if not self.available_tools:
+            print("❌ No tools available")
+            return
+        
+        print("\n" + "="*60)
+        print("🛠️  AVAILABLE TOOLS")
+        print("="*60)
+        
+        for i, (name, tool_info) in enumerate(self.available_tools.items(), 1):
+            description = tool_info.get("description", "No description available")
+            input_schema = tool_info.get("inputSchema", {})
+            properties = input_schema.get("properties", {})
+            
+            print(f"\n{i}. 🔧 {name}")
+            print(f"   📝 {description}")
+            
+            if properties:
+                print("   📋 Parameters:")
+                for param_name, param_info in properties.items():
+                    param_type = param_info.get("type", "unknown")
+                    param_desc = param_info.get("description", "No description")
+                    required = param_name in input_schema.get("required", [])
+                    req_mark = " (required)" if required else " (optional)"
+                    print(f"      • {param_name} ({param_type}){req_mark}: {param_desc}")
+            else:
+                print("   📋 No parameters required")
+        
+        print("\n" + "="*60)
+
     async def call_tool(self, tool_name: str, arguments: Optional[dict] = None, timeout: float = 60.0) -> str:
         """Call an MCP tool and return the result"""
         print(f"[CLIENT] 🔧 Calling tool: {tool_name}")
@@ -38,7 +99,7 @@ class SimpleMCPClient:
                 "arguments": arguments or {}
             })
             
-            print(f"[CLIENT] 📤 Sending: {request.strip()}")
+            print(f"[CLIENT] 📤 Sending: {json.dumps({'tool': tool_name, 'args': arguments}, indent=2)}")
             
             # Send request to server
             self.process.stdin.write(request.encode('utf-8'))
@@ -66,6 +127,9 @@ class SimpleMCPClient:
                 if isinstance(result, dict):
                     # If result is a dict, try to extract content
                     content = result.get("content", result.get("text", str(result)))
+                    if isinstance(content, list):
+                        # Handle content arrays
+                        return "\n".join(str(item.get("text", item)) if isinstance(item, dict) else str(item) for item in content)
                     return str(content)
                 else:
                     return str(result)
@@ -156,8 +220,8 @@ class SimpleMCPClient:
                     "tools": {}
                 },
                 "clientInfo": {
-                    "name": "playwright_client",
-                    "version": "1.0.0"
+                    "name": "interactive_mcp_client",
+                    "version": "2.0.0"
                 }
             })
             
@@ -189,16 +253,125 @@ class SimpleMCPClient:
             print(f"[CLIENT] ❌ Initialization error: {e}")
             return False
 
-    async def test_connection(self):
-        """Test the MCP connection with a simple ping"""
-        print("[CLIENT] 🏓 Testing connection...")
+    def get_tool_parameters(self, tool_name: str) -> Dict[str, Any]:
+        """Get parameter information for a specific tool"""
+        if tool_name not in self.available_tools:
+            return {}
+        
+        tool_info = self.available_tools[tool_name]
+        input_schema = tool_info.get("inputSchema", {})
+        return input_schema.get("properties", {})
+
+    def collect_parameters(self, tool_name: str) -> Dict[str, Any]:
+        """Interactively collect parameters for a tool"""
+        if tool_name not in self.available_tools:
+            print(f"❌ Tool '{tool_name}' not found")
+            return {}
+        
+        tool_info = self.available_tools[tool_name]
+        input_schema = tool_info.get("inputSchema", {})
+        properties = input_schema.get("properties", {})
+        required = input_schema.get("required", [])
+        
+        if not properties:
+            return {}
+        
+        print(f"\n📋 Collecting parameters for '{tool_name}':")
+        parameters = {}
+        
+        for param_name, param_info in properties.items():
+            param_type = param_info.get("type", "string")
+            param_desc = param_info.get("description", "No description")
+            is_required = param_name in required
+            
+            while True:
+                prompt = f"  {param_name} ({param_type}){'*' if is_required else ''}: {param_desc}\n  > "
+                value = input(prompt).strip()
+                
+                if not value and is_required:
+                    print("    ❌ This parameter is required!")
+                    continue
+                
+                if not value:
+                    break
+                
+                # Type conversion
+                try:
+                    if param_type == "integer":
+                        parameters[param_name] = int(value)
+                    elif param_type == "number":
+                        parameters[param_name] = float(value)
+                    elif param_type == "boolean":
+                        parameters[param_name] = value.lower() in ('true', '1', 'yes', 'y')
+                    elif param_type == "array":
+                        # Simple array handling - split by comma
+                        parameters[param_name] = [item.strip() for item in value.split(',')]
+                    else:
+                        parameters[param_name] = value
+                    break
+                except ValueError:
+                    print(f"    ❌ Invalid {param_type} value!")
+                    continue
+        
+        return parameters
+
+
+async def interactive_mode(client):
+    """Interactive mode for calling tools"""
+    print("\n🎮 Interactive Mode - Type 'help' for commands")
+    
+    while True:
         try:
-            result = await self.call_tool("ping", {})
-            print(f"[CLIENT] 🏓 Ping result: {result}")
-            return "pong" in result.lower()
+            command = input("\n🔧 > ").strip()
+            
+            if not command:
+                continue
+            
+            if command.lower() in ['exit', 'quit', 'q']:
+                print("👋 Goodbye!")
+                break
+            
+            if command.lower() in ['help', 'h']:
+                print("\n📖 Available commands:")
+                print("  • list - Show all available tools")
+                print("  • call <tool_name> - Call a specific tool")
+                print("  • <tool_name> - Quick call a tool (same as 'call <tool_name>')")
+                print("  • help - Show this help")
+                print("  • quit/exit - Exit the program")
+                continue
+            
+            if command.lower() == 'list':
+                client.display_tools()
+                continue
+            
+            # Handle 'call <tool_name>' or just '<tool_name>'
+            if command.startswith('call '):
+                tool_name = command[5:].strip()
+            else:
+                tool_name = command
+            
+            if tool_name in client.available_tools:
+                print(f"\n🔧 Preparing to call '{tool_name}'...")
+                
+                # Collect parameters
+                parameters = client.collect_parameters(tool_name)
+                
+                print(f"\n🚀 Calling '{tool_name}' with parameters: {parameters}")
+                result = await client.call_tool(tool_name, parameters)
+                
+                print("\n" + "="*60)
+                print("📄 RESULT")
+                print("="*60)
+                print(result)
+                print("="*60)
+            else:
+                print(f"❌ Tool '{tool_name}' not found. Type 'list' to see available tools.")
+                
+        except KeyboardInterrupt:
+            print("\n👋 Goodbye!")
+            break
         except Exception as e:
-            print(f"[CLIENT] 🏓 Ping failed: {e}")
-            return False
+            print(f"❌ Error: {e}")
 
 
 async def main():
@@ -244,56 +417,18 @@ async def main():
         server_process.terminate()
         return
     
+    # Discover and list available tools
+    await client.list_tools()
+    client.display_tools()
+    
     # Test connection
-    if not await client.test_connection():
-        print("⚠️ Connection test failed, but continuing...")
-
-    # Start Playwright
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        page = await browser.new_page()
-
-        # Get URL from user
-        url = input("\n🔗 Enter a URL to summarize: ").strip()
-        if not url:
-            print("❌ No URL provided")
-            await browser.close()
-            server_process.terminate()
-            return
-            
-        if not url.startswith(('http://', 'https://')):
-            url = 'https://' + url
-            print(f"🔗 Using URL: {url}")
-
-        try:
-            print(f"🌐 Loading page: {url}")
-            await page.goto(url, wait_until="domcontentloaded", timeout=30000)
-            print("✅ Page loaded successfully")
-            
-            # Take screenshot for debugging
-            await page.screenshot(path="debug.png", full_page=True)
-            print("📸 Screenshot saved as debug.png")
-            
-        except Exception as e:
-            print(f"⚠️ Failed to load page: {e}")
-            print("🔄 Continuing with summarization anyway...")
-
-        try:
-            print("\n🔄 Calling summarization tool...")
-            
-            # Call the MCP tool to summarize
-            result = await client.call_tool("summarize_website", {"url": url})
-            
-            print("\n" + "="*60)
-            print("📄 SUMMARY RESULT")
-            print("="*60)
-            print(result)
-            print("="*60)
-            
-        except Exception as e:
-            print(f"❌ Error during summarization: {e}")
-
-        await browser.close()
+    print("\n🏓 Testing connection...")
+    if "ping" in client.available_tools:
+        result = await client.call_tool("ping")
+        print(f"🏓 Ping result: {result}")
+    
+    # Enter interactive mode
+    await interactive_mode(client)
 
     # Cleanup
     print("\n🛑 Shutting down...")
